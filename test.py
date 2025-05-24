@@ -101,7 +101,7 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
         state["qa_pairs"] = []
         return state
 
-    qa_pairs = []
+    all_qa_pairs = []
     
     # Step 1: Extract potential requirements
     if use_spacy:
@@ -181,28 +181,73 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
                 question = q.replace("Question: ", "").strip()
                 answer = a.replace("Answer: ", "").strip()
                 if question and answer:
-                    qa_pairs.append({"question": question, "answer": answer})
+                    all_qa_pairs.append({
+                        "question": question,
+                        "answer": answer,
+                        "prompt_type": prompt_type,
+                        "requirement": cleaned_req
+                    })
                     logger.info(f"Generated Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
                 else:
                     logger.warning(f"Empty question or answer for requirement {idx + 1}: {cleaned_req[:50]}...")
                     # Fallback
                     question = f"What is the detail for {cleaned_req[:20].lower()}...?"
                     answer = cleaned_req
-                    qa_pairs.append({"question": question, "answer": answer})
+                    all_qa_pairs.append({
+                        "question": question,
+                        "answer": answer,
+                        "prompt_type": prompt_type,
+                        "requirement": cleaned_req
+                    })
                     logger.info(f"Fallback Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
             except:
                 logger.warning(f"Failed to parse Q&A for requirement {idx + 1}: {cleaned_req[:50]}...")
                 # Fallback
                 question = f"What is the detail for {cleaned_req[:20].lower()}...?"
                 answer = cleaned_req
-                qa_pairs.append({"question": question, "answer": answer})
+                all_qa_pairs.append({
+                    "question": question,
+                    "answer": answer,
+                    "prompt_type": prompt_type,
+                    "requirement": cleaned_req
+                })
                 logger.info(f"Fallback Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
         except Exception as e:
             logger.error(f"Error generating Q&A for requirement {idx + 1}: {cleaned_req[:50]}... {e}")
             continue
+
+    # Step 5: Save all Q&A pairs for reference
+    try:
+        with open("all_rfp_qa.json", "w") as f:
+            json.dump(all_qa_pairs, f, indent=2)
+        logger.info(f"Saved {len(all_qa_pairs)} Q&A pairs to all_rfp_qa.json")
+    except Exception as e:
+        logger.error(f"Error saving all Q&A pairs: {e}")
+
+    # Step 6: Prioritize and limit Q&A pairs for the final response
+    # Prioritize based on prompt type (scope, resource, location, timeline over general)
+    prioritized_pairs = []
+    priority_types = ["scope", "resource", "location", "timeline"]
     
-    state["qa_pairs"] = qa_pairs
-    logger.info(f"Generated {len(qa_pairs)} Q&A pairs")
+    # First, add pairs from priority categories
+    for prompt_type in priority_types:
+        for pair in all_qa_pairs:
+            if pair["prompt_type"] == prompt_type and len(prioritized_pairs) < 30:
+                prioritized_pairs.append({
+                    "question": pair["question"],
+                    "answer": pair["answer"]
+                })
+    
+    # If we still have room, add general pairs
+    for pair in all_qa_pairs:
+        if pair["prompt_type"] == "general" and len(prioritized_pairs) < 30:
+            prioritized_pairs.append({
+                "question": pair["question"],
+                "answer": pair["answer"]
+            })
+
+    state["qa_pairs"] = prioritized_pairs
+    logger.info(f"Selected {len(prioritized_pairs)} prioritized Q&A pairs for the response")
     return state
 
 # Node 3: Store Q&A (for user review/UI display)
