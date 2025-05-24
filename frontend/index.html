@@ -1,0 +1,25 @@
+<header>RFP Automation</header>
+
+<div class="container">
+
+  <!-- Phase 1: Drag & Drop -->
+  <div class="section">
+    <label>📄 Upload RFP Document (PDF or DOCX)</label>
+    <div class="upload-area" id="uploadArea">Drag & Drop or Click to Upload</div>
+    <input type="file" id="rfpUpload" accept=".pdf,.docx">
+    <label for="qaBox">📋 Extracted Questions and Answers</label>
+    <textarea id="qaBox" rows="10" placeholder="Q&A will appear here..."></textarea>
+  </div>
+
+  <!-- Phase 2: Editable Q&A -->
+  <div class="section">
+    <label for="editedQA">✍️ Modify Q&A (if needed)</label>
+    <textarea id="editedQA" rows="10" placeholder="Edit or answer the questions here..."></textarea>
+    <button onclick="generateResponse()">Generate RFP Response</button>
+    <label for="responseBox">📄 Generated Response</label>
+    <textarea id="responseBox" rows="12" placeholder="Final response will appear here..."></textarea>
+    <button onclick="downloadResponse()">⬇️ Download Response</button>
+  </div>
+
+</div>
+
