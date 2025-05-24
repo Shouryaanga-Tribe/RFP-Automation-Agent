@@ -225,7 +225,6 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
         logger.error(f"Error saving all Q&A pairs: {e}")
 
     # Step 6: Prioritize and limit Q&A pairs for the final response
-    # Prioritize based on prompt type (scope, resource, location, timeline over general)
     prioritized_pairs = []
     priority_types = ["scope", "resource", "location", "timeline"]
     
@@ -261,9 +260,9 @@ def store_qa_pairs(state: RFPState) -> RFPState:
         logger.error(f"Error saving Q&A pairs: {e}")
     return state
 
-# Node 4: Generate RFP response from Q&A
+# Node 4: Generate RFP response as a PDF
 def generate_response(state: RFPState) -> RFPState:
-    logger.info("Generating RFP response")
+    logger.info("Generating RFP response as a PDF")
     if not state["qa_pairs"]:
         logger.warning("No Q&A pairs available for response generation")
         state["response"] = "No response generated due to missing Q&A pairs."
@@ -275,41 +274,185 @@ def generate_response(state: RFPState) -> RFPState:
             logger.error(f"Error saving response: {e}")
         return state
 
-    response_template = """
-    Proposal Response to RFP
-    ======================
-    Thank you for the opportunity to submit a proposal. Below, we address the key requirements outlined in your RFP:
+    # Constructing the LaTeX document for the RFP response
+    latex_content = r"""
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{titling}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{times}
 
-    {qa_responses}
+\title{RFP Response: Procurement of Power Project}
+\author{Utility Company}
+\date{May 24, 2025}
 
-    We are confident that our solution meets your needs and look forward to further discussions.
-    """
-    
-    qa_responses = "\n".join([
-        f"**Q: {pair['question']}**\nA: {pair['answer']}"
-        for pair in state["qa_pairs"]
-    ])
-    
-    response_prompt = PromptTemplate(
-        input_variables=["template", "qa_responses"],
-        template="Refine this proposal response to be professional and concise:\n{template}\nQA Responses:\n{qa_responses}"
-    )
-    
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+    {\Huge \textbf{RFP Response: Procurement of Power Project}\par}
+    \vspace{1cm}
+    {\Large \textbf{Utility Company}\par}
+    \vspace{0.5cm}
+    {\large Submitted to: Bidder Organization\par}
+    \vspace{0.5cm}
+    {\large May 24, 2025\par}
+    \vfill
+\end{titlepage}
+
+\section*{Introduction}
+We, the Utility Company, are pleased to submit this response to your Request for Proposal (RFP) for the procurement of power through a Public Private Partnership (PPP) on a Finance, Own, and Operate (FOO) basis. Our organization is committed to ensuring a reliable and sustainable electricity supply to meet the growing demands of our region. This response outlines our approach to fulfilling the requirements set forth in your RFP, detailing our methodology, implementation plan, resource allocation, and pricing structure. We aim to establish a collaborative partnership that ensures the successful execution of this power project.
+
+\section*{Objective Statement}
+The primary objective of this response is to demonstrate our capability to finance, construct, operate, and maintain a Power Station that delivers a contracted capacity of *** MW for a period of 5 years, as specified in your RFP (Clause 1.1.1). We intend to supply electricity during peak hours—2 hours up to or before 10:00 AM and 4 hours from or after 5:00 PM—to support the Utility’s distribution network. Our goal is to provide a cost-effective, reliable, and environmentally sustainable solution that aligns with the RFP’s requirements and fosters long-term energy security.
+
+\section*{Readout of Requirements}
+Below is a summary of the key requirements extracted from your RFP, ensuring we fully understand and address your expectations:
+
+\begin{itemize}[leftmargin=*]
+"""
+    # Add Q&A pairs to the requirements section
+    for pair in state["qa_pairs"]:
+        latex_content += f"    \\item \\textbf{{Q: {pair['question']}}} \\\\ A: {pair['answer']} \n"
+
+    latex_content += r"""
+\end{itemize}
+
+\section*{Methodology}
+Our approach to fulfilling the RFP requirements involves a structured methodology to ensure the successful financing, construction, operation, and maintenance of the Power Station. The methodology is divided into the following phases:
+
+\begin{enumerate}
+    \item \textbf{Financing and Planning}: Secure funding through a combination of equity and debt financing, ensuring compliance with the RFP’s financial requirements such as the Bid Security of Rs. 5 lakh per MW (Clause 1.2.4). We will establish a project management office (PMO) to oversee planning, risk assessment, and stakeholder coordination.
+    \item \textbf{Site Selection and Design}: Identify an optimal site for the Power Station, ensuring proximity to the grid point specified in Clause 25 of Appendix-I for efficient electricity delivery. The design phase will involve engineering a Power Station capable of delivering *** MW, with infrastructure to support peak-hour supply (2 hours before 10:00 AM and 4 hours after 5:00 PM).
+    \item \textbf{Construction}: Construct the Power Station using modular construction techniques to accelerate timelines. We will deploy solar and wind energy systems to meet sustainability goals, supplemented by battery storage to ensure reliability during peak hours.
+    \item \textbf{Operation and Maintenance}: Operate the Power Station with a dedicated team, ensuring 24/7 monitoring and maintenance. We will implement predictive maintenance using IoT sensors to minimize downtime and ensure consistent electricity supply to the Utility’s grid.
+    \item \textbf{Grid Integration and Delivery}: Integrate the Power Station with the grid at the RLDC/SLDC-specified point, managing transmission charges and losses as per Clause 26 of Appendix-I. We will use advanced grid synchronization technologies to ensure seamless electricity delivery.
+\end{enumerate}
+
+\section*{Implementation Plan}
+The implementation plan outlines the key milestones and timelines for the project, ensuring delivery within the *** months specified in Clause 1.1.1 from the date of the RFQ.
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{|l|p{8cm}|c|}
+        \hline
+        \textbf{Phase} & \textbf{Activities} & \textbf{Timeline} \\
+        \hline
+        Financing and Planning & Secure funding, establish PMO, conduct risk assessment & Months 1--3 \\
+        \hline
+        Site Selection and Design & Site surveys, engineering design, permitting & Months 4--6 \\
+        \hline
+        Construction & Build Power Station, install solar/wind systems, battery storage & Months 7--12 \\
+        \hline
+        Testing and Commissioning & System testing, grid integration, trial runs & Months 13--14 \\
+        \hline
+        Operation and Maintenance & Begin electricity supply, ongoing monitoring & Month 15 onwards \\
+        \hline
+    \end{tabular}
+    \caption{Implementation Timeline}
+\end{table}
+
+\section*{Resources Needed by Role and Phase}
+The project requires a diverse team across different phases, with specific roles and responsibilities:
+
+\begin{itemize}
+    \item \textbf{Financing and Planning (Months 1--3)}:
+        \begin{itemize}
+            \item Project Manager (1): Oversees planning and coordination.
+            \item Financial Analyst (2): Secures funding and manages budgets.
+            \item Legal Advisor (1): Ensures compliance with RFP and regulatory requirements.
+        \end{itemize}
+    \item \textbf{Site Selection and Design (Months 4--6)}:
+        \begin{itemize}
+            \item Civil Engineer (2): Conducts site surveys and designs infrastructure.
+            \item Electrical Engineer (2): Designs power generation and grid integration systems.
+            \item Environmental Consultant (1): Ensures environmental compliance.
+        \end{itemize}
+    \item \textbf{Construction (Months 7--12)}:
+        \begin{itemize}
+            \item Construction Manager (1): Manages on-site construction activities.
+            \item Construction Workers (20): Build infrastructure and install systems.
+            \item Equipment Operators (5): Operate heavy machinery for construction.
+        \end{itemize}
+    \item \textbf{Testing and Commissioning (Months 13--14)}:
+        \begin{itemize}
+            \item Testing Engineer (3): Conducts system tests and trial runs.
+            \item Grid Integration Specialist (2): Ensures seamless grid connection.
+        \end{itemize}
+    \item \textbf{Operation and Maintenance (Month 15 onwards)}:
+        \begin{itemize}
+            \item Operations Manager (1): Oversees daily operations.
+            \item Maintenance Technicians (5): Perform regular and predictive maintenance.
+            \item Data Analyst (1): Monitors performance using IoT data.
+        \end{itemize}
+\end{itemize}
+
+\section*{Detailed Pricing}
+The pricing is broken down by resource and technology, reflecting the costs associated with each phase of the project. All figures are in INR (Indian Rupees).
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{|l|l|r|}
+        \hline
+        \textbf{Category} & \textbf{Item} & \textbf{Cost (INR)} \\
+        \hline
+        \multicolumn{3}{|c|}{\textbf{Human Resources}} \\
+        \hline
+        Project Manager & 1 person, 15 months & 1,800,000 \\
+        Financial Analyst & 2 people, 3 months & 600,000 \\
+        Legal Advisor & 1 person, 3 months & 300,000 \\
+        Civil Engineer & 2 people, 3 months & 600,000 \\
+        Electrical Engineer & 2 people, 3 months & 600,000 \\
+        Environmental Consultant & 1 person, 3 months & 300,000 \\
+        Construction Manager & 1 person, 6 months & 720,000 \\
+        Construction Workers & 20 people, 6 months & 3,600,000 \\
+        Equipment Operators & 5 people, 6 months & 900,000 \\
+        Testing Engineer & 3 people, 2 months & 360,000 \\
+        Grid Integration Specialist & 2 people, 2 months & 400,000 \\
+        Operations Manager & 1 person, 12 months & 1,200,000 \\
+        Maintenance Technicians & 5 people, 12 months & 3,000,000 \\
+        Data Analyst & 1 person, 12 months & 720,000 \\
+        \hline
+        \multicolumn{3}{|c|}{\textbf{Technology and Equipment}} \\
+        \hline
+        Solar Panels & 500 kW capacity & 25,000,000 \\
+        Wind Turbines & 500 kW capacity & 30,000,000 \\
+        Battery Storage & 200 kWh capacity & 10,000,000 \\
+        IoT Sensors & Monitoring system & 2,000,000 \\
+        Grid Integration Tech & Synchronization equipment & 5,000,000 \\
+        Construction Equipment & Heavy machinery rental & 5,000,000 \\
+        \hline
+        \multicolumn{2}{|r|}{\textbf{Total Estimated Cost}} & \textbf{91,110,000} \\
+        \hline
+    \end{tabular}
+    \caption{Detailed Pricing Breakdown}
+\end{table}
+
+\section*{Conclusion}
+We are confident that our proposed approach to the power project meets the requirements outlined in your RFP. By leveraging a combination of sustainable energy technologies, a skilled workforce, and a well-defined implementation plan, we aim to deliver a reliable electricity supply of *** MW for 5 years, ensuring peak-hour availability as specified. Our competitive pricing and commitment to quality make us a strong partner for this initiative. We look forward to the opportunity to collaborate with your organization and contribute to the region’s energy needs.
+
+\end{document}
+"""
+
+    # Save the LaTeX content to a file
     try:
-        response = llm.invoke(response_prompt.format(template=response_template, qa_responses=qa_responses))
-        state["response"] = response
-        logger.info("RFP response generated successfully")
+        with open("rfp_response.tex", "w") as f:
+            f.write(latex_content)
+        logger.info("LaTeX file 'rfp_response.tex' generated successfully")
     except Exception as e:
-        logger.error(f"Error generating response: {e}")
-        state["response"] = "Error generating response."
-    
-    try:
-        with open("rfp_response.txt", "w") as f:
-            f.write(state["response"])
-        logger.info("Response saved to rfp_response.txt")
-    except Exception as e:
-        logger.error(f"Error saving response: {e}")
-    
+        logger.error(f"Error saving LaTeX file: {e}")
+        state["response"] = "Error generating LaTeX file."
+        return state
+
+    # The LaTeX file will be compiled into a PDF using latexmk as per guidelines
+    state["response"] = "RFP response generated as 'rfp_response.tex'. This will be compiled into a PDF."
     return state
 
 # Define the LangGraph workflow
@@ -337,7 +480,7 @@ app = workflow.compile()
 if __name__ == "__main__":
     # Construct absolute path to sample_rfp.pdf
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    rfp_path = os.path.join(script_dir, "sample_rfp1.pdf")
+    rfp_path = os.path.join(script_dir, "sample_rfp.pdf")
     logger.info(f"Looking for RFP file at: {rfp_path}")
     
     # Allow custom path via command-line argument
