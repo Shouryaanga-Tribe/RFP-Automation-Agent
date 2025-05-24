@@ -12,6 +12,10 @@ import sys
 import pytesseract
 from PIL import Image
 import io
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import RGBColor
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -51,7 +55,7 @@ def extract_rfp_text(state: RFPState) -> RFPState:
     if not os.path.exists(state["rfp_path"]):
         error_msg = (
             f"RFP file not found at: {state['rfp_path']}\n"
-            "Please ensure 'sample_rfp.pdf' exists in the project directory."
+            "Please ensure 'apexneural_rfp.pdf' exists in the project directory."
         )
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
@@ -177,9 +181,15 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
             
             # Parse the LLM output
             try:
-                q, a = qa_text.split("\n")
-                question = q.replace("Question: ", "").strip()
-                answer = a.replace("Answer: ", "").strip()
+                # Handle single-line or malformed outputs
+                if "\n" in qa_text:
+                    lines = qa_text.split("\n", 1)
+                    question = lines[0].replace("Question: ", "").strip()
+                    answer = lines[1].replace("Answer: ", "").strip() if len(lines) > 1 else cleaned_req
+                else:
+                    # If no newline, assume it's a question or use the prompt's question
+                    question = qa_prompts[prompt_type].template.split("Question: ")[1].split("\n")[0].format(requirement=cleaned_req[:20])
+                    answer = cleaned_req
                 if question and answer:
                     all_qa_pairs.append({
                         "question": question,
@@ -200,8 +210,8 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
                         "requirement": cleaned_req
                     })
                     logger.info(f"Fallback Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
-            except:
-                logger.warning(f"Failed to parse Q&A for requirement {idx + 1}: {cleaned_req[:50]}...")
+            except Exception as parse_error:
+                logger.warning(f"Failed to parse Q&A for requirement {idx + 1}: {cleaned_req[:50]}... {parse_error}")
                 # Fallback
                 question = f"What is the detail for {cleaned_req[:20].lower()}...?"
                 answer = cleaned_req
@@ -260,9 +270,9 @@ def store_qa_pairs(state: RFPState) -> RFPState:
         logger.error(f"Error saving Q&A pairs: {e}")
     return state
 
-# Node 4: Generate RFP response as a PDF
+# Node 4: Generate RFP response as a DOCX
 def generate_response(state: RFPState) -> RFPState:
-    logger.info("Generating RFP response as a PDF")
+    logger.info("Generating RFP response as a DOCX")
     if not state["qa_pairs"]:
         logger.warning("No Q&A pairs available for response generation")
         state["response"] = "No response generated due to missing Q&A pairs."
@@ -274,185 +284,170 @@ def generate_response(state: RFPState) -> RFPState:
             logger.error(f"Error saving response: {e}")
         return state
 
-    # Constructing the LaTeX document for the RFP response
-    latex_content = r"""
-\documentclass[a4paper,12pt]{article}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{geometry}
-\geometry{margin=1in}
-\usepackage{booktabs}
-\usepackage{enumitem}
-\usepackage{titling}
-\usepackage{parskip}
-\usepackage{xcolor}
-\usepackage{times}
+    # Create a new Document
+    doc = Document()
 
-\title{RFP Response: Procurement of Power Project}
-\author{Utility Company}
-\date{May 24, 2025}
-
-\begin{document}
-
-\begin{titlepage}
-    \centering
-    \vspace*{2cm}
-    {\Huge \textbf{RFP Response: Procurement of Power Project}\par}
-    \vspace{1cm}
-    {\Large \textbf{Utility Company}\par}
-    \vspace{0.5cm}
-    {\large Submitted to: Bidder Organization\par}
-    \vspace{0.5cm}
-    {\large May 24, 2025\par}
-    \vfill
-\end{titlepage}
-
-\section*{Introduction}
-We, the Utility Company, are pleased to submit this response to your Request for Proposal (RFP) for the procurement of power through a Public Private Partnership (PPP) on a Finance, Own, and Operate (FOO) basis. Our organization is committed to ensuring a reliable and sustainable electricity supply to meet the growing demands of our region. This response outlines our approach to fulfilling the requirements set forth in your RFP, detailing our methodology, implementation plan, resource allocation, and pricing structure. We aim to establish a collaborative partnership that ensures the successful execution of this power project.
-
-\section*{Objective Statement}
-The primary objective of this response is to demonstrate our capability to finance, construct, operate, and maintain a Power Station that delivers a contracted capacity of *** MW for a period of 5 years, as specified in your RFP (Clause 1.1.1). We intend to supply electricity during peak hours—2 hours up to or before 10:00 AM and 4 hours from or after 5:00 PM—to support the Utility’s distribution network. Our goal is to provide a cost-effective, reliable, and environmentally sustainable solution that aligns with the RFP’s requirements and fosters long-term energy security.
-
-\section*{Readout of Requirements}
-Below is a summary of the key requirements extracted from your RFP, ensuring we fully understand and address your expectations:
-
-\begin{itemize}[leftmargin=*]
-"""
-    # Add Q&A pairs to the requirements section
-    for pair in state["qa_pairs"]:
-        latex_content += f"    \\item \\textbf{{Q: {pair['question']}}} \\\\ A: {pair['answer']} \n"
-
-    latex_content += r"""
-\end{itemize}
-
-\section*{Methodology}
-Our approach to fulfilling the RFP requirements involves a structured methodology to ensure the successful financing, construction, operation, and maintenance of the Power Station. The methodology is divided into the following phases:
-
-\begin{enumerate}
-    \item \textbf{Financing and Planning}: Secure funding through a combination of equity and debt financing, ensuring compliance with the RFP’s financial requirements such as the Bid Security of Rs. 5 lakh per MW (Clause 1.2.4). We will establish a project management office (PMO) to oversee planning, risk assessment, and stakeholder coordination.
-    \item \textbf{Site Selection and Design}: Identify an optimal site for the Power Station, ensuring proximity to the grid point specified in Clause 25 of Appendix-I for efficient electricity delivery. The design phase will involve engineering a Power Station capable of delivering *** MW, with infrastructure to support peak-hour supply (2 hours before 10:00 AM and 4 hours after 5:00 PM).
-    \item \textbf{Construction}: Construct the Power Station using modular construction techniques to accelerate timelines. We will deploy solar and wind energy systems to meet sustainability goals, supplemented by battery storage to ensure reliability during peak hours.
-    \item \textbf{Operation and Maintenance}: Operate the Power Station with a dedicated team, ensuring 24/7 monitoring and maintenance. We will implement predictive maintenance using IoT sensors to minimize downtime and ensure consistent electricity supply to the Utility’s grid.
-    \item \textbf{Grid Integration and Delivery}: Integrate the Power Station with the grid at the RLDC/SLDC-specified point, managing transmission charges and losses as per Clause 26 of Appendix-I. We will use advanced grid synchronization technologies to ensure seamless electricity delivery.
-\end{enumerate}
-
-\section*{Implementation Plan}
-The implementation plan outlines the key milestones and timelines for the project, ensuring delivery within the *** months specified in Clause 1.1.1 from the date of the RFQ.
-
-\begin{table}[h]
-    \centering
-    \begin{tabular}{|l|p{8cm}|c|}
-        \hline
-        \textbf{Phase} & \textbf{Activities} & \textbf{Timeline} \\
-        \hline
-        Financing and Planning & Secure funding, establish PMO, conduct risk assessment & Months 1--3 \\
-        \hline
-        Site Selection and Design & Site surveys, engineering design, permitting & Months 4--6 \\
-        \hline
-        Construction & Build Power Station, install solar/wind systems, battery storage & Months 7--12 \\
-        \hline
-        Testing and Commissioning & System testing, grid integration, trial runs & Months 13--14 \\
-        \hline
-        Operation and Maintenance & Begin electricity supply, ongoing monitoring & Month 15 onwards \\
-        \hline
-    \end{tabular}
-    \caption{Implementation Timeline}
-\end{table}
-
-\section*{Resources Needed by Role and Phase}
-The project requires a diverse team across different phases, with specific roles and responsibilities:
-
-\begin{itemize}
-    \item \textbf{Financing and Planning (Months 1--3)}:
-        \begin{itemize}
-            \item Project Manager (1): Oversees planning and coordination.
-            \item Financial Analyst (2): Secures funding and manages budgets.
-            \item Legal Advisor (1): Ensures compliance with RFP and regulatory requirements.
-        \end{itemize}
-    \item \textbf{Site Selection and Design (Months 4--6)}:
-        \begin{itemize}
-            \item Civil Engineer (2): Conducts site surveys and designs infrastructure.
-            \item Electrical Engineer (2): Designs power generation and grid integration systems.
-            \item Environmental Consultant (1): Ensures environmental compliance.
-        \end{itemize}
-    \item \textbf{Construction (Months 7--12)}:
-        \begin{itemize}
-            \item Construction Manager (1): Manages on-site construction activities.
-            \item Construction Workers (20): Build infrastructure and install systems.
-            \item Equipment Operators (5): Operate heavy machinery for construction.
-        \end{itemize}
-    \item \textbf{Testing and Commissioning (Months 13--14)}:
-        \begin{itemize}
-            \item Testing Engineer (3): Conducts system tests and trial runs.
-            \item Grid Integration Specialist (2): Ensures seamless grid connection.
-        \end{itemize}
-    \item \textbf{Operation and Maintenance (Month 15 onwards)}:
-        \begin{itemize}
-            \item Operations Manager (1): Oversees daily operations.
-            \item Maintenance Technicians (5): Perform regular and predictive maintenance.
-            \item Data Analyst (1): Monitors performance using IoT data.
-        \end{itemize}
-\end{itemize}
-
-\section*{Detailed Pricing}
-The pricing is broken down by resource and technology, reflecting the costs associated with each phase of the project. All figures are in INR (Indian Rupees).
-
-\begin{table}[h]
-    \centering
-    \begin{tabular}{|l|l|r|}
-        \hline
-        \textbf{Category} & \textbf{Item} & \textbf{Cost (INR)} \\
-        \hline
-        \multicolumn{3}{|c|}{\textbf{Human Resources}} \\
-        \hline
-        Project Manager & 1 person, 15 months & 1,800,000 \\
-        Financial Analyst & 2 people, 3 months & 600,000 \\
-        Legal Advisor & 1 person, 3 months & 300,000 \\
-        Civil Engineer & 2 people, 3 months & 600,000 \\
-        Electrical Engineer & 2 people, 3 months & 600,000 \\
-        Environmental Consultant & 1 person, 3 months & 300,000 \\
-        Construction Manager & 1 person, 6 months & 720,000 \\
-        Construction Workers & 20 people, 6 months & 3,600,000 \\
-        Equipment Operators & 5 people, 6 months & 900,000 \\
-        Testing Engineer & 3 people, 2 months & 360,000 \\
-        Grid Integration Specialist & 2 people, 2 months & 400,000 \\
-        Operations Manager & 1 person, 12 months & 1,200,000 \\
-        Maintenance Technicians & 5 people, 12 months & 3,000,000 \\
-        Data Analyst & 1 person, 12 months & 720,000 \\
-        \hline
-        \multicolumn{3}{|c|}{\textbf{Technology and Equipment}} \\
-        \hline
-        Solar Panels & 500 kW capacity & 25,000,000 \\
-        Wind Turbines & 500 kW capacity & 30,000,000 \\
-        Battery Storage & 200 kWh capacity & 10,000,000 \\
-        IoT Sensors & Monitoring system & 2,000,000 \\
-        Grid Integration Tech & Synchronization equipment & 5,000,000 \\
-        Construction Equipment & Heavy machinery rental & 5,000,000 \\
-        \hline
-        \multicolumn{2}{|r|}{\textbf{Total Estimated Cost}} & \textbf{91,110,000} \\
-        \hline
-    \end{tabular}
-    \caption{Detailed Pricing Breakdown}
-\end{table}
-
-\section*{Conclusion}
-We are confident that our proposed approach to the power project meets the requirements outlined in your RFP. By leveraging a combination of sustainable energy technologies, a skilled workforce, and a well-defined implementation plan, we aim to deliver a reliable electricity supply of *** MW for 5 years, ensuring peak-hour availability as specified. Our competitive pricing and commitment to quality make us a strong partner for this initiative. We look forward to the opportunity to collaborate with your organization and contribute to the region’s energy needs.
-
-\end{document}
-"""
-
-    # Save the LaTeX content to a file
     try:
-        with open("rfp_response.tex", "w") as f:
-            f.write(latex_content)
-        logger.info("LaTeX file 'rfp_response.tex' generated successfully")
+        # Title Page
+        doc.add_heading('RFP Response: AI-Driven Automation Platform', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p = doc.add_paragraph('ApexNeural Inc.')
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.runs[0].font.size = Pt(16)
+        p = doc.add_paragraph('Submitted to: Bidder Organization')
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.runs[0].font.size = Pt(14)
+        p = doc.add_paragraph('May 24, 2025')
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.runs[0].font.size = Pt(14)
+        doc.add_page_break()
+
+        # Introduction
+        doc.add_heading('Introduction', 1)
+        doc.add_paragraph(
+            "We, ApexNeural Inc., are pleased to submit this response to your Request for Proposal (RFP) for an AI-driven automation platform for neural network training. Our organization is committed to delivering cutting-edge AI solutions to enhance neural network training efficiency. This response outlines our approach to fulfilling the requirements set forth in your RFP, detailing our methodology, implementation plan, resource allocation, and pricing structure. We aim to establish a collaborative partnership that ensures the successful execution of this project."
+        )
+
+        # Objective Statement
+        doc.add_heading('Objective Statement', 1)
+        doc.add_paragraph(
+            "The primary objective of this response is to demonstrate our capability to design, develop, and deploy a cloud-based automation platform that integrates with ApexNeural’s existing infrastructure (TensorFlow, PyTorch, Kubernetes) and complies with industry standards for security and performance, as specified in your RFP. Our goal is to provide a scalable, efficient, and secure solution that streamlines neural network training and supports ApexNeural’s data lakes and compute clusters."
+        )
+
+        # Readout of Requirements
+        doc.add_heading('Readout of Requirements', 1)
+        doc.add_paragraph(
+            "Below is a summary of the key requirements extracted from your RFP, ensuring we fully understand and address your expectations:"
+        )
+        for pair in state["qa_pairs"]:
+            if not (pair.get('question') and pair.get('answer')):
+                logger.warning(f"Skipping invalid Q&A pair: {pair}")
+                continue
+            p = doc.add_paragraph()
+            run = p.add_run(f"Q: {pair['question']}")
+            run.bold = True
+            p.add_run(f"\nA: {pair['answer']}")
+
+        # Methodology
+        doc.add_heading('Methodology', 1)
+        doc.add_paragraph(
+            "Our approach to fulfilling the RFP requirements involves a structured methodology to ensure the successful design, development, and deployment of the AI-driven automation platform. The methodology is divided into the following phases:"
+        )
+        methodology = [
+            ("Requirement Analysis", "Collaborate with ApexNeural to understand infrastructure and requirements, ensuring compatibility with TensorFlow, PyTorch, and Kubernetes."),
+            ("Platform Design", "Design a cloud-based automation platform with modular architecture to support scalability and integration with data lakes and compute clusters."),
+            ("Development", "Develop the platform using agile methodologies, incorporating security features and performance optimizations as per industry standards."),
+            ("Testing and Validation", "Conduct rigorous testing, including integration tests with ApexNeural’s systems and performance benchmarking."),
+            ("Deployment and Maintenance", "Deploy the platform to ApexNeural’s cloud environment and provide ongoing maintenance and support.")
+        ]
+        for phase, description in methodology:
+            p = doc.add_paragraph(f"{phase}: ", style='List Number')
+            p.add_run(description)
+
+        # Implementation Plan
+        doc.add_heading('Implementation Plan', 1)
+        doc.add_paragraph(
+            "The implementation plan outlines the key milestones and timelines for the project, ensuring delivery within the specified timeline from the RFP."
+        )
+        table = doc.add_table(rows=6, cols=3)
+        table.style = 'Table Grid'
+        headers = ["Phase", "Activities", "Timeline"]
+        for i, header in enumerate(headers):
+            table.cell(0, i).text = header
+            table.cell(0, i).paragraphs[0].runs[0].font.bold = True
+        timeline_data = [
+            ("Requirement Analysis", "Stakeholder meetings, requirement gathering", "Months 1--2"),
+            ("Platform Design", "Architecture design, integration planning", "Months 3--4"),
+            ("Development", "Coding, security implementation", "Months 5--8"),
+            ("Testing and Validation", "Integration and performance testing", "Months 9--10"),
+            ("Deployment and Maintenance", "Platform deployment, ongoing support", "Month 11 onwards")
+        ]
+        for row_idx, (phase, activities, timeline) in enumerate(timeline_data, 1):
+            table.cell(row_idx, 0).text = phase
+            table.cell(row_idx, 1).text = activities
+            table.cell(row_idx, 2).text = timeline
+        doc.add_paragraph("Table: Implementation Timeline")
+
+        # Resources Needed by Role and Phase
+        doc.add_heading('Resources Needed by Role and Phase', 1)
+        doc.add_paragraph(
+            "The project requires a diverse team across different phases, with specific roles and responsibilities:"
+        )
+        resources = [
+            ("Requirement Analysis (Months 1--2)", [
+                "Project Manager (1): Oversees planning and coordination.",
+                "Business Analyst (2): Gathers and documents requirements."
+            ]),
+            ("Platform Design (Months 3--4)", [
+                "Solutions Architect (2): Designs platform architecture.",
+                "Security Specialist (1): Ensures compliance with security standards."
+            ]),
+            ("Development (Months 5--8)", [
+                "Software Engineers (5): Develop platform components.",
+                "DevOps Engineer (2): Manages CI/CD and Kubernetes integration."
+            ]),
+            ("Testing and Validation (Months 9--10)", [
+                "QA Engineers (3): Conducts testing and validation.",
+                "Integration Specialist (1): Ensures system compatibility."
+            ]),
+            ("Deployment and Maintenance (Month 11 onwards)", [
+                "Operations Manager (1): Oversees platform operations.",
+                "Support Engineers (2): Provides ongoing maintenance."
+            ])
+        ]
+        for phase, roles in resources:
+            doc.add_paragraph(phase + ":", style='List Bullet')
+            for role in roles:
+                doc.add_paragraph(role, style='List Bullet 2')
+
+        # Detailed Pricing
+        doc.add_heading('Detailed Pricing', 1)
+        doc.add_paragraph(
+            "The pricing is broken down by resource and technology, reflecting the costs associated with each phase of the project. All figures are in INR (Indian Rupees)."
+        )
+        table = doc.add_table(rows=14, cols=3)
+        table.style = 'Table Grid'
+        headers = ["Category", "Item", "Cost (INR)"]
+        for i, header in enumerate(headers):
+            table.cell(0, i).text = header
+            table.cell(0, i).paragraphs[0].runs[0].font.bold = True
+        pricing_data = [
+            ("Human Resources", "", ""),
+            ("", "Project Manager", "1,200,000"),
+            ("", "Business Analyst", "800,000"),
+            ("", "Solutions Architect", "1,000,000"),
+            ("", "Security Specialist", "600,000"),
+            ("", "Software Engineers", "3,000,000"),
+            ("", "DevOps Engineer", "1,200,000"),
+            ("", "QA Engineers", "900,000"),
+            ("", "Integration Specialist", "400,000"),
+            ("", "Operations Manager", "800,000"),
+            ("", "Support Engineers", "1,000,000"),
+            ("Technology and Equipment", "", ""),
+            ("", "Cloud Infrastructure", "5,000,000"),
+            ("", "Development Tools", "1,000,000"),
+            ("", "Total Estimated Cost", "16,900,000")
+        ]
+        for row_idx, (category, item, cost) in enumerate(pricing_data, 1):
+            table.cell(row_idx, 0).text = category
+            table.cell(row_idx, 1).text = item
+            table.cell(row_idx, 2).text = cost
+        doc.add_paragraph("Table: Detailed Pricing Breakdown")
+
+        # Conclusion
+        doc.add_heading('Conclusion', 1)
+        doc.add_paragraph(
+            "We are confident that our proposed approach to the AI-driven automation platform meets the requirements outlined in your RFP. By leveraging our expertise in AI and cloud technologies, a skilled workforce, and a well-defined implementation plan, we aim to deliver a scalable and secure platform that enhances ApexNeural’s neural network training capabilities. Our competitive pricing and commitment to quality make us a strong partner for this initiative. We look forward to the opportunity to collaborate with your organization."
+        )
+
+        # Save the DOCX file
+        doc.save("rfp_response.docx")
+        logger.info("DOCX file 'rfp_response.docx' generated successfully")
+        state["response"] = "RFP response generated as 'rfp_response.docx'."
     except Exception as e:
-        logger.error(f"Error saving LaTeX file: {e}")
-        state["response"] = "Error generating LaTeX file."
+        logger.error(f"Error generating DOCX file: {e}")
+        state["response"] = f"Error generating DOCX file: {e}"
         return state
 
-    # The LaTeX file will be compiled into a PDF using latexmk as per guidelines
-    state["response"] = "RFP response generated as 'rfp_response.tex'. This will be compiled into a PDF."
     return state
 
 # Define the LangGraph workflow
@@ -478,9 +473,9 @@ app = workflow.compile()
 
 # Example usage
 if __name__ == "__main__":
-    # Construct absolute path to sample_rfp.pdf
+    # Construct absolute path to apexneural_rfp.pdf
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    rfp_path = os.path.join(script_dir, "sample_rfp.pdf")
+    rfp_path = os.path.join(script_dir, "apexneural_rfp.pdf")
     logger.info(f"Looking for RFP file at: {rfp_path}")
     
     # Allow custom path via command-line argument
