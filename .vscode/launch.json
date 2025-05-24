@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python Debugger: Python File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "python": "c:\\Users\\upran\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "justMyCode": false,
+      "timeout": 60000,
+      "logToFile": true
+    }
+  ]
+}
