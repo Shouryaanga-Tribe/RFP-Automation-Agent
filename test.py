@@ -9,6 +9,9 @@ import logging
 import os
 import re
 import sys
+import pytesseract
+from PIL import Image
+import io
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -48,26 +51,43 @@ def extract_rfp_text(state: RFPState) -> RFPState:
     if not os.path.exists(state["rfp_path"]):
         error_msg = (
             f"RFP file not found at: {state['rfp_path']}\n"
-            "Please ensure 'sample_rfp.pdf' exists in the project directory "
-            "(C:\\Users\\kckde\\Desktop\\apex_hackathon\\RFP-Automation-Agent)."
+            "Please ensure 'sample_rfp.pdf' exists in the project directory."
         )
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
     
     try:
+        text = ""
         with pdfplumber.open(state["rfp_path"]) as pdf:
-            text = ""
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-            if not text.strip():
-                logger.warning("No text extracted from RFP. The PDF may contain scanned images or no selectable text.")
-                state["rfp_text"] = ""
-            else:
-                logger.info(f"Extracted text: {text[:200]}...")
-                state["rfp_text"] = text
-                logger.info("RFP text extracted successfully")
+                else:
+                    # Fallback: Try OCR if text extraction fails (e.g., for scanned PDFs)
+                    logger.info("No text extracted from page, attempting OCR...")
+                    try:
+                        # Convert page to image for OCR
+                        page_image = page.to_image(resolution=300)
+                        img_byte_arr = io.BytesIO()
+                        page_image.original.save(img_byte_arr, format='PNG')
+                        img_byte_arr.seek(0)
+                        img = Image.open(img_byte_arr)
+                        ocr_text = pytesseract.image_to_string(img)
+                        if ocr_text:
+                            text += ocr_text + "\n"
+                            logger.info(f"OCR extracted text: {ocr_text[:100]}...")
+                    except Exception as ocr_error:
+                        logger.warning(f"OCR failed for page: {ocr_error}")
+                        continue
+        
+        if not text.strip():
+            logger.warning("No text extracted from RFP after attempting OCR.")
+            state["rfp_text"] = ""
+        else:
+            logger.info(f"Extracted text: {text[:200]}...")
+            state["rfp_text"] = text
+            logger.info("RFP text extracted successfully")
     except Exception as e:
         logger.error(f"Error extracting RFP text: {e}")
         state["rfp_text"] = ""
@@ -83,62 +103,102 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
 
     qa_pairs = []
     
+    # Step 1: Extract potential requirements
     if use_spacy:
         doc = nlp(state["rfp_text"])
         requirements = [
             sent.text.strip() for sent in doc.sents
-            if any(keyword in sent.text.lower() for keyword in ["must", "shall", "required"])
+            if any(keyword in sent.text.lower() for keyword in ["must", "shall", "required", "scope", "resource", "location", "capacity", "timeline", "duration"])
         ]
     else:
         sentences = re.split(r'[.!?]\s+', state["rfp_text"])
         requirements = [
             sent.strip() for sent in sentences
-            if any(keyword in sent.lower() for keyword in ["must", "shall", "required"])
+            if any(keyword in sent.lower() for keyword in ["must", "shall", "required", "scope", "resource", "location", "capacity", "timeline", "duration"])
         ]
     
-    logger.info(f"Found {len(requirements)} potential requirements: {requirements}")
+    # Step 2: Look for numbered clauses (e.g., "1.1.1") to capture more details
+    clause_pattern = r'\d+\.\d+(\.\d+)?\s+.*?(?=\n\d+\.\d+|\n[A-Z]|\Z)'
+    clauses = re.findall(clause_pattern, state["rfp_text"], re.DOTALL)
+    requirements.extend([clause.strip() for clause in clauses if clause.strip()])
     
-    # Simplified prompt for better compatibility with flan-t5-small
-    qa_prompt = PromptTemplate(
-        input_variables=["requirement"],
-        template="Turn this into a question and answer:\n{requirement}\nQuestion: What is the requirement for this?\nAnswer: {requirement}"
-    )
+    # Remove duplicates while preserving order
+    seen = set()
+    requirements = [req for req in requirements if not (req in seen or seen.add(req))]
     
-    for req in requirements[:3]:
+    logger.info(f"Found {len(requirements)} potential requirements: {requirements[:3]}...")
+
+    # Step 3: Define multiple prompt templates for different types of questions
+    qa_prompts = {
+        "scope": PromptTemplate(
+            input_variables=["requirement"],
+            template="Generate a question and answer about the scope of work:\nRequirement: {requirement}\nQuestion: What is the scope of work related to this requirement?\nAnswer: {requirement}"
+        ),
+        "resource": PromptTemplate(
+            input_variables=["requirement"],
+            template="Generate a question and answer about the resources needed:\nRequirement: {requirement}\nQuestion: What resources are required for this?\nAnswer: {requirement}"
+        ),
+        "location": PromptTemplate(
+            input_variables=["requirement"],
+            template="Generate a question and answer about the work location:\nRequirement: {requirement}\nQuestion: Where must this work be performed?\nAnswer: {requirement}"
+        ),
+        "timeline": PromptTemplate(
+            input_variables=["requirement"],
+            template="Generate a question and answer about the timeline:\nRequirement: {requirement}\nQuestion: What is the timeline for this requirement?\nAnswer: {requirement}"
+        ),
+        "general": PromptTemplate(
+            input_variables=["requirement"],
+            template="Generate a question and answer:\nRequirement: {requirement}\nQuestion: What is the requirement for this?\nAnswer: {requirement}"
+        )
+    }
+    
+    # Step 4: Generate Q&A pairs for all requirements
+    for idx, req in enumerate(requirements):
         try:
-            # Clean up the requirement text for better Q&A generation
+            # Clean up the requirement text
             cleaned_req = req.replace('\n-', '').strip()
             if not cleaned_req:
                 continue
                 
-            prompt = qa_prompt.format(requirement=cleaned_req)
-            qa_text = llm.invoke(prompt)  # Use invoke instead of deprecated __call__
-            logger.info(f"LLM output for requirement '{cleaned_req[:50]}...': {qa_text}")
+            # Determine the type of prompt to use based on keywords
+            prompt_type = "general"
+            if any(keyword in cleaned_req.lower() for keyword in ["scope", "work", "responsibility"]):
+                prompt_type = "scope"
+            elif any(keyword in cleaned_req.lower() for keyword in ["resource", "cost", "security", "deposit"]):
+                prompt_type = "resource"
+            elif any(keyword in cleaned_req.lower() for keyword in ["location", "place", "address", "grid"]):
+                prompt_type = "location"
+            elif any(keyword in cleaned_req.lower() for keyword in ["timeline", "duration", "date", "period"]):
+                prompt_type = "timeline"
+
+            prompt = qa_prompts[prompt_type].format(requirement=cleaned_req)
+            qa_text = llm.invoke(prompt)
+            logger.info(f"LLM output for requirement {idx + 1} ('{cleaned_req[:50]}...'): {qa_text}")
             
-            # Try to parse the LLM output
+            # Parse the LLM output
             try:
                 q, a = qa_text.split("\n")
                 question = q.replace("Question: ", "").strip()
                 answer = a.replace("Answer: ", "").strip()
                 if question and answer:
                     qa_pairs.append({"question": question, "answer": answer})
-                    logger.info(f"Generated Q&A: Q: {question[:50]}... A: {answer[:50]}...")
+                    logger.info(f"Generated Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
                 else:
-                    logger.warning(f"Empty question or answer for requirement: {cleaned_req[:50]}...")
-                    # Fallback: Generate a basic Q&A pair
-                    question = f"What is the requirement for {cleaned_req[:20].lower()}...?"
+                    logger.warning(f"Empty question or answer for requirement {idx + 1}: {cleaned_req[:50]}...")
+                    # Fallback
+                    question = f"What is the detail for {cleaned_req[:20].lower()}...?"
                     answer = cleaned_req
                     qa_pairs.append({"question": question, "answer": answer})
-                    logger.info(f"Fallback Q&A: Q: {question[:50]}... A: {answer[:50]}...")
+                    logger.info(f"Fallback Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
             except:
-                logger.warning(f"Failed to parse Q&A for requirement: {cleaned_req[:50]}...")
-                # Fallback: Generate a basic Q&A pair
-                question = f"What is the requirement for {cleaned_req[:20].lower()}...?"
+                logger.warning(f"Failed to parse Q&A for requirement {idx + 1}: {cleaned_req[:50]}...")
+                # Fallback
+                question = f"What is the detail for {cleaned_req[:20].lower()}...?"
                 answer = cleaned_req
                 qa_pairs.append({"question": question, "answer": answer})
-                logger.info(f"Fallback Q&A: Q: {question[:50]}... A: {answer[:50]}...")
+                logger.info(f"Fallback Q&A {idx + 1}: Q: {question[:50]}... A: {answer[:50]}...")
         except Exception as e:
-            logger.error(f"Error generating Q&A for requirement: {cleaned_req[:50]}... {e}")
+            logger.error(f"Error generating Q&A for requirement {idx + 1}: {cleaned_req[:50]}... {e}")
             continue
     
     state["qa_pairs"] = qa_pairs
