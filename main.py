@@ -40,7 +40,7 @@ except Exception as e:
     use_spacy = False
 
 # Gemini API setup
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AIzaSyA7QFDytlNKzi_dOcTrriljfUiDpbXVQq4"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "<Your Gemini API Key>"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-1.5-pro"  # Using Gemini 1.5 Pro as default
 if not GEMINI_API_KEY:
     logger.error("Gemini API key not found. Please set GEMINI_API_KEY in environment or .env file.")
