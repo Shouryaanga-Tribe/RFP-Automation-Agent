@@ -489,7 +489,7 @@ app = workflow.compile()
 if __name__ == "__main__":
     # Construct absolute path to apexneural_rfp.pdf
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    rfp_path = os.path.join(script_dir, "apexneural_rfp.pdf")
+    rfp_path = os.path.join(script_dir, "18pages.pdf")
     logger.info(f"Looking for RFP file at: {rfp_path}")
     
     # Allow custom path via command-line argument

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RFP Automation</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f9f9f9;
+      margin: 0;
+      padding: 0;
+    }
+
+    header {
+      background: #0047ab;
+      color: white;
+      padding: 20px;
+      text-align: center;
+      font-size: 28px;
+      font-weight: bold;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 30px auto;
+      background: white;
+      padding: 25px;
+      border-radius: 10px;
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .section {
+      margin-bottom: 30px;
+    }
+
+    .upload-area {
+      border: 2px dashed #ccc;
+      padding: 40px;
+      text-align: center;
+      border-radius: 10px;
+      color: #888;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+
+    .upload-area.dragover {
+      background: #eaf0ff;
+      border-color: #0047ab;
+      color: #0047ab;
+    }
+
+    label {
+      font-weight: bold;
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    textarea, button {
+      width: 100%;
+      margin-top: 8px;
+      margin-bottom: 20px;
+      padding: 12px;
+      font-size: 16px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      background: #0047ab;
+      color: white;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+
+    button:hover {
+      background: #003080;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<header>RFP Automation</header>
+
+<div class="container">
+
+  <!-- Phase 1: Drag & Drop -->
+  <div class="section">
+    <label>📄 Upload RFP Document (PDF or DOCX)</label>
+    <div class="upload-area" id="uploadArea">Drag & Drop or Click to Upload</div>
+    <input type="file" id="rfpUpload" accept=".pdf,.docx">
+    <label for="qaBox">📋 Extracted Questions and Answers</label>
+    <textarea id="qaBox" rows="10" placeholder="Q&A will appear here..."></textarea>
+  </div>
+
+  <!-- Phase 2: Editable Q&A -->
+  <div class="section">
+    <label for="editedQA">✍️ Modify Q&A (if needed)</label>
+    <textarea id="editedQA" rows="10" placeholder="Edit or answer the questions here..."></textarea>
+    <button onclick="generateResponse()">Generate RFP Response</button>
+    <label for="responseBox">📄 Generated Response</label>
+    <textarea id="responseBox" rows="12" placeholder="Final response will appear here..."></textarea>
+    <button onclick="downloadResponse()">⬇️ Download Response</button>
+  </div>
+
+</div>
+
+<script>
+  const uploadArea = document.getElementById("uploadArea");
+  const fileInput = document.getElementById("rfpUpload");
+
+  // Click opens file selector
+  uploadArea.addEventListener("click", () => fileInput.click());
+
+  // Drag styling
+  uploadArea.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    uploadArea.classList.add("dragover");
+  });
+
+  uploadArea.addEventListener("dragleave", () => {
+    uploadArea.classList.remove("dragover");
+  });
+
+  uploadArea.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove("dragover");
+
+    if (e.dataTransfer.files.length) {
+      fileInput.files = e.dataTransfer.files;
+      uploadArea.textContent = `Uploaded: ${e.dataTransfer.files[0].name}`;
+      extractQA(); // Auto-extract on drop
+    }
+  });
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length) {
+      uploadArea.textContent = `Uploaded: ${fileInput.files[0].name}`;
+      extractQA(); // Auto-extract on select
+    }
+  });
+
+  function extractQA() {
+    // Placeholder logic for demo
+    const dummyQA = `Q: What is the submission deadline?\nA: The submission deadline is July 15, 2025.\n\nQ: Who is eligible?\nA: Only registered vendors.`;
+    document.getElementById("qaBox").value = dummyQA;
+    document.getElementById("editedQA").value = dummyQA;
+  }
+
+  function generateResponse() {
+    const modifiedQA = document.getElementById("editedQA").value;
+    const generatedResponse = `Thank you for your interest. Based on your questions:\n\n${modifiedQA}\n\nPlease reach out for any further clarification.`;
+    document.getElementById("responseBox").value = generatedResponse;
+  }
+
+  function downloadResponse() {
+    const responseText = document.getElementById("responseBox").value;
+    const blob = new Blob([responseText], { type: "text/plain" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "RFP_Response.txt";
+    link.click();
+  }
+</script>
+
+</body>
+</html>

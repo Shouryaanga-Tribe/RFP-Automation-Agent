@@ -39,46 +39,66 @@ except Exception as e:
     logger.warning(f"spaCy not available, using keyword-based extraction: {e}")
     use_spacy = False
 
-# Grok API setup
-GROK_API_KEY = os.getenv("XAI_API_KEY") or "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"
-if not GROK_API_KEY:
-    logger.error("Grok API key not found. Please set XAI_API_KEY in environment or .env file.")
-    raise ValueError("Grok API key is required.")
+# Gemini API setup
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "<Your Gemini API Key>"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-1.5-pro"  # Using Gemini 1.5 Pro as default
+if not GEMINI_API_KEY:
+    logger.error("Gemini API key not found. Please set GEMINI_API_KEY in environment or .env file.")
+    raise ValueError("Gemini API key is required.")
+logger.info(f"Using Gemini API key: {GEMINI_API_KEY[:10]}...{GEMINI_API_KEY[-4:]}")
+logger.info(f"Using model: {GEMINI_MODEL}")
 
-def call_grok_api(prompt: str, model: str = "grok-beta", max_retries: int = 3) -> str:
-    """Call xAI Grok API with retry logic for rate limits and errors."""
-    url = "https://api.x.ai/v1/chat/completions"
+def call_gemini_api(prompt: str, model: str = GEMINI_MODEL, max_retries: int = 3) -> str:
+    """Call Google Gemini API with retry logic for rate limits and errors."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 512,
-        "temperature": 0.7
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 512
+        }
     }
 
+    logger.info(f"Sending payload to Gemini API: {json.dumps(payload, indent=2)}")
     for attempt in range(max_retries):
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             response.raise_for_status()
             result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
+            # Check if the response contains the expected structure
+            if "candidates" in result and result["candidates"]:
+                return result["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                logger.error(f"Unexpected Gemini API response format: {result}")
+                return ""
         except requests.exceptions.HTTPError as e:
             if response.status_code == 429:
                 logger.warning(f"Rate limit hit, retrying in {2 ** attempt} seconds...")
                 time.sleep(2 ** attempt)
             elif response.status_code == 401:
-                logger.error("Invalid API key. Please verify XAI_API_KEY.")
+                logger.error("Invalid API key. Please verify GEMINI_API_KEY.")
+                return ""
+            elif response.status_code == 400:
+                logger.error(f"Gemini API error: {e}, Response: {response.text}")
                 return ""
             else:
-                logger.error(f"Grok API error: {e}")
+                logger.error(f"Gemini API error: {e}, Response: {response.text}")
                 return ""
         except Exception as e:
-            logger.error(f"Grok API call failed: {e}")
+            logger.error(f"Gemini API call failed: {e}")
             return ""
-    logger.error("Max retries exceeded for Grok API.")
+    logger.error("Max retries exceeded for Gemini API.")
     return ""
 
 # Node 1: Extract text from RFP PDF
@@ -115,9 +135,9 @@ def extract_rfp_text(state: RFPState) -> RFPState:
         state["rfp_text"] = ""
     return state
 
-# Node 2: Generate Q&A from RFP text using Grok API
+# Node 2: Generate Q&A from RFP text using Gemini API
 def generate_qa_pairs(state: RFPState) -> RFPState:
-    logger.info("Generating Q&A pairs from RFP text using Grok API")
+    logger.info("Generating Q&A pairs from RFP text using Gemini API")
     if not state["rfp_text"]:
         logger.warning("No RFP text available for Q&A generation")
         state["qa_pairs"] = []
@@ -129,6 +149,8 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
     # Step 1: Extract explicit RFP questions (Q1–Q15)
     question_pattern = r'Q\d+\s+([^\n?]+\?)'
     explicit_questions = re.findall(question_pattern, state["rfp_text"], re.MULTILINE)
+    # Normalize spacing in extracted questions
+    explicit_questions = [re.sub(r'([a-zA-Z])([A-Z])', r'\1 \2', q).replace('  ', ' ') for q in explicit_questions]
     logger.info(f"Found {len(explicit_questions)} explicit RFP questions: {explicit_questions[:3]}")
 
     # Step 2: Generate answers for explicit questions
@@ -140,19 +162,22 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
                 f"Given this RFP question from ApexNeural's AI automation platform RFP: '{question}', "
                 "provide a detailed, complete answer demonstrating technical expertise. "
                 "Ensure the answer is specific, avoids truncation, and does not contain '...' placeholders. "
+                "Ensure proper spacing between words and sentences for readability. "
                 "Context: The RFP requires a cloud-based platform for neural network training with TensorFlow/PyTorch integration, "
                 "6-month timeline, $500,000–$1,000,000 budget, GDPR/CCPA compliance. "
                 "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
             )
-            qa_text = call_grok_api(prompt)
-            logger.info(f"Grok API output for Q{idx} ('{question[:50]}'): {qa_text[:100]}")
+            qa_text = call_gemini_api(prompt)
+            logger.info(f"Gemini API output for Q{idx} ('{question[:50]}'): {qa_text[:100]}")
             
-            # Parse Grok output
+            # Parse Gemini output
             try:
                 lines = qa_text.split("\n")
                 if len(lines) >= 2 and lines[0].startswith("Question: ") and lines[1].startswith("Answer: "):
                     parsed_question = lines[0].replace("Question: ", "").strip()
                     answer = lines[1].replace("Answer: ", "").strip()
+                    # Normalize spaces in the answer
+                    answer = re.sub(r'\s+', ' ', answer).strip()
                     if parsed_question and answer and "..." not in answer:
                         prompt_type = "general"
                         if any(kw in question.lower() for kw in ["scope", "platform", "work", "dashboard"]):
@@ -178,7 +203,7 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
                 else:
                     raise ValueError("Incorrect format")
             except Exception as e:
-                logger.warning(f"Failed to parse Grok Q&A for Q{idx}: {question[:50]}: {e}")
+                logger.warning(f"Failed to parse Gemini Q&A for Q{idx}: {question[:50]}: {e}")
                 answer = f"Response to '{question}' requires further clarification from ApexNeural."
                 all_qa_pairs.append({
                     "question": question,
@@ -217,7 +242,8 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
     
     seen = set(explicit_questions)
     requirements = [req for req in requirements if req not in seen and not (req in seen or seen.add(req))]
-    
+    # Normalize spacing in requirements
+    requirements = [re.sub(r'([a-zA-Z])([A-Z])', r'\1 \2', req).replace('  ', ' ') for req in requirements]
     logger.info(f"Found {len(requirements)} additional requirements: {requirements[:3]}")
 
     # Step 4: Generate Q&A for additional requirements
@@ -225,31 +251,37 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
         "scope": (
             "Given this RFP requirement: '{requirement}', generate a question and answer about the scope of work. "
             "Ensure the answer is complete, specific, and free of '...' placeholders. "
+            "Ensure proper spacing between words and sentences for readability. "
             "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
         ),
         "resource": (
             "Given this RFP requirement: '{requirement}', generate a question and answer about the resources needed. "
             "Ensure the answer is complete, specific, and free of '...' placeholders. "
+            "Ensure proper spacing between words and sentences for readability. "
             "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
         ),
         "timeline": (
             "Given this RFP requirement: '{requirement}', generate a question and answer about the timeline. "
             "Ensure the answer is complete, specific, and free of '...' placeholders. "
+            "Ensure proper spacing between words and sentences for readability. "
             "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
         ),
         "compliance": (
             "Given this RFP requirement: '{requirement}', generate a question and answer about compliance. "
             "Ensure the answer is complete, specific, and free of '...' placeholders. "
+            "Ensure proper spacing between words and sentences for readability. "
             "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
         ),
         "pricing": (
             "Given this RFP requirement: '{requirement}', generate a question and answer about pricing or costs. "
             "Ensure the answer is complete, specific, and free of '...' placeholders. "
+            "Ensure proper spacing between words and sentences for readability. "
             "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
         ),
         "general": (
             "Given this RFP requirement: '{requirement}', generate a question and answer about the requirement. "
             "Ensure the answer is complete, specific, and free of '...' placeholders. "
+            "Ensure proper spacing between words and sentences for readability. "
             "Format as:\nQuestion: [Question]\nAnswer: [Answer]"
         )
     }
@@ -275,13 +307,15 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
                 prompt_type = "pricing"
 
             prompt = qa_prompts[prompt_type].format(requirement=cleaned_req)
-            qa_text = call_grok_api(prompt)
+            qa_text = call_gemini_api(prompt)
             
             try:
                 lines = qa_text.split("\n")
                 if len(lines) >= 2 and lines[0].startswith("Question: ") and lines[1].startswith("Answer: "):
                     question = lines[0].replace("Question: ", "").strip()
                     answer = lines[1].replace("Answer: ", "").strip()
+                    # Normalize spaces in the answer
+                    answer = re.sub(r'\s+', ' ', answer).strip()
                     if question and answer and "..." not in answer:
                         all_qa_pairs.append({
                             "question": question,
@@ -295,7 +329,7 @@ def generate_qa_pairs(state: RFPState) -> RFPState:
                 else:
                     raise ValueError("Incorrect format")
             except Exception:
-                logger.warning(f"Failed to parse Grok Q&A for requirement {idx}: {cleaned_req[:50]}")
+                logger.warning(f"Failed to parse Gemini Q&A for requirement {idx}: {cleaned_req[:50]}")
                 question = f"What does the requirement '{cleaned_req[:20]}' entail?"
                 answer = cleaned_req
                 all_qa_pairs.append({
@@ -351,9 +385,9 @@ def store_qa_pairs(state: RFPState) -> RFPState:
         logger.error(f"Error saving Q&A pairs: {e}")
     return state
 
-# Node 4: Generate RFP response using Grok API
+# Node 4: Generate RFP response using Gemini API
 def generate_response(state: RFPState) -> RFPState:
-    logger.info("Generating RFP response as a LaTeX file using Grok API")
+    logger.info("Generating RFP response as a LaTeX file using Gemini API")
     
     if not state["qa_pairs"]:
         logger.warning("No Q&A pairs available for response generation")
@@ -377,6 +411,8 @@ def generate_response(state: RFPState) -> RFPState:
     def escape_latex(text):
         if not isinstance(text, str):
             text = str(text)
+        # Normalize spaces: replace multiple spaces with a single space
+        text = re.sub(r'\s+', ' ', text).strip()
         replacements = {
             '\\': '\\textbackslash{}',
             '{': '\\{',
@@ -423,10 +459,11 @@ def generate_response(state: RFPState) -> RFPState:
         if org_match:
             organization = org_match.group(1).strip()[:100]
 
-    # Generate response sections with Grok API
+    # Generate response sections with Gemini API
     summary_prompt = (
         "Based on the following Q&A pairs from ApexNeural's AI automation platform RFP, generate a professional RFP response. "
         "Do not directly quote the Q&A. Ensure all answers are complete and free of '...' placeholders. "
+        "Ensure proper spacing between words and sentences for readability. "
         "Include these sections, each 2-3 sentences, tailored to the RFP (6-month timeline, $500,000–$1,000,000 budget, TensorFlow/PyTorch integration, GDPR/CCPA compliance):\n"
         "Introduction: [Introduce the response and commitment]\n"
         "Objective: [State project goals]\n"
@@ -442,13 +479,13 @@ def generate_response(state: RFPState) -> RFPState:
     )
 
     try:
-        summary_text = call_grok_api(summary_prompt)
-        logger.info(f"Grok API summary generated: {summary_text[:200]}")
+        summary_text = call_gemini_api(summary_prompt)
+        logger.info(f"Gemini API summary generated: {summary_text[:200]}")
     except Exception as e:
-        logger.error(f"Grok API summary failed: {e}")
+        logger.error(f"Gemini API summary failed: {e}")
         summary_text = ""
 
-    # Parse Grok summary
+    # Parse Gemini summary
     sections = {
         "Introduction": "We propose a comprehensive solution to develop an AI-driven automation platform for ApexNeural Inc., enhancing neural network training efficiency with robust integration and compliance.",
         "Objective": "The objective is to deliver a scalable, secure platform that automates data preprocessing, model training, and deployment within 6 months to optimize ApexNeural’s AI pipeline.",
@@ -481,17 +518,18 @@ def generate_response(state: RFPState) -> RFPState:
             elif current_section == "Methodology" and line:
                 sections[current_section].append(line.strip())
     except:
-        logger.warning("Failed to parse Grok summary, using defaults")
+        logger.warning("Failed to parse Gemini summary, using defaults")
 
     # Generate methodology steps if not provided
     if not sections["Methodology"]:
         methodology_prompt = (
             "Based on these scope-related Q&A pairs, generate 5 concise methodology steps (1-2 sentences each, professional tone, no direct quotes, no '...' placeholders) "
-            "for developing an AI-driven automation platform:\n" +
+            "for developing an AI-driven automation platform. "
+            "Ensure proper spacing between words and sentences for readability:\n" +
             "\n".join([f"Q: {p['question']}\nA: {p['answer']}" for p in scope_pairs[:6]])
         )
         try:
-            meth_text = call_grok_api(methodology_prompt)
+            meth_text = call_gemini_api(methodology_prompt)
             sections["Methodology"] = [line.strip() for line in meth_text.split("\n") if line.strip()][:5]
         except:
             sections["Methodology"] = [
@@ -582,7 +620,7 @@ def generate_response(state: RFPState) -> RFPState:
 """
     for pair in scope_pairs[:6] + compliance_pairs[:3]:
         latex_header += f"    \\item {escape_latex(pair['answer'][:150])}\n"
-    latex_header += r"\end{itemize}"
+    latex_header += r"\end{itemize}" + "\n\n"
 
     latex_methodology = r"""
 \section*{Methodology}
@@ -591,7 +629,7 @@ Our approach to delivering the AI-driven automation platform includes:
 """
     for i, step in enumerate(sections["Methodology"], 1):
         latex_methodology += f"    \\item \\textbf{{Phase {i}}}: {escape_latex(step)}\n"
-    latex_methodology += r"\end{enumerate}"
+    latex_methodology += r"\end{enumerate}" + "\n\n"
 
     latex_timeline = rf"""
 \section*{{Implementation Plan}}
@@ -610,7 +648,7 @@ Our approach to delivering the AI-driven automation platform includes:
     \end{tabular}
     \caption{Implementation Timeline}
 \end{table}
-"""
+""" + "\n\n"
 
     latex_resources = rf"""
 \section*{{Resources}}
@@ -637,7 +675,7 @@ Our approach to delivering the AI-driven automation platform includes:
     \end{tabular}
     \caption{Resource Allocation}
 \end{table}
-"""
+""" + "\n\n"
 
     latex_pricing = rf"""
 \section*{{Pricing}}
@@ -663,7 +701,7 @@ Our approach to delivering the AI-driven automation platform includes:
     \end{tabular}
     \caption{Cost Breakdown}
 \end{table}
-"""
+""" + "\n\n"
 
     latex_conclusion = rf"""
 \section*{{Conclusion}}
@@ -684,12 +722,128 @@ Our approach to delivering the AI-driven automation platform includes:
             logger.info("Wrote LaTeX file")
         
         logger.info(f"LaTeX file '{output_path}' generated successfully")
-        state["response"] = f"RFP response generated as '{output_path}'. Ready for PDF compilation."
+        state["response"] = f"RFP response generated as '{output_path}'. Ready for refinement."
     
     except Exception as e:
         logger.error(f"Error saving LaTeX file: {e}\n{traceback.format_exc()}")
         state["response"] = f"Error generating LaTeX file: {e}"
     
+    return state
+
+# Node 5: Refine the RFP response using Gemini API
+def refine_response(state: RFPState) -> RFPState:
+    logger.info("Refining RFP response using Gemini API for grammar, spelling, and improvement")
+    
+    if not state["response"].startswith("RFP response generated as"):
+        logger.warning("No LaTeX file to refine")
+        return state
+
+    # Extract the file path from the state
+    output_path_match = re.search(r"'([^']+)'", state["response"])
+    if not output_path_match:
+        logger.error("Could not find LaTeX file path in state.response")
+        state["response"] = "Error: Could not refine LaTeX file due to missing file path."
+        return state
+    
+    output_path = output_path_match.group(1)
+    if not os.path.exists(output_path):
+        logger.error(f"LaTeX file not found at: {output_path}")
+        state["response"] = f"Error: LaTeX file not found at {output_path}."
+        return state
+
+    # Read the LaTeX file content
+    try:
+        with open(output_path, "r", encoding="utf-8") as f:
+            latex_content = f.read()
+        logger.info(f"Read LaTeX file content: {latex_content[:200]}...")
+    except Exception as e:
+        logger.error(f"Error reading LaTeX file: {e}")
+        state["response"] = f"Error reading LaTeX file for refinement: {e}"
+        return state
+
+    # Define sections to refine (excluding tables and structured content)
+    sections_to_refine = ["Introduction", "Objective", "Requirements", "Implementation Plan", "Resources", "Pricing", "Conclusion"]
+    refined_sections = {}
+
+    # Extract content for each section
+    for section in sections_to_refine:
+        # Match the section content (from \section*{Section} to the next \section* or \end{table})
+        pattern = rf"\\section\*\{{{section}\}}(.*?)(?=\\section\*\{{|\\end\{{table\}}|\\end\{{document\}})"
+        try:
+            match = re.search(pattern, latex_content, re.DOTALL)
+            if match:
+                section_content = match.group(1).strip()
+                # Remove LaTeX commands (e.g., \item, \textbf) and normalize spaces
+                section_text = re.sub(r'\\(?:item|textbf|emph)\s*\{[^}]*\}', '', section_content)
+                section_text = re.sub(r'\\[a-zA-Z]+\s*(?:\{[^}]*\})?', '', section_text)
+                section_text = re.sub(r'\s+', ' ', section_text).strip()
+                if section_text:
+                    logger.info(f"Extracted content for {section}: {section_text[:100]}...")
+                    # Send to Gemini API for refinement
+                    refine_prompt = (
+                        f"Refine the following text from an RFP response for grammar, spelling, clarity, and overall professionalism. "
+                        f"Ensure proper spacing between words and sentences. "
+                        f"Maintain a professional tone suitable for an RFP response. "
+                        f"Do not alter the factual content or structure (e.g., do not convert paragraphs to lists). "
+                        f"Text: '{section_text}'\n"
+                        f"Return the refined text."
+                    )
+                    try:
+                        refined_text = call_gemini_api(refine_prompt)
+                        refined_text = re.sub(r'\s+', ' ', refined_text).strip()
+                        logger.info(f"Refined {section}: {refined_text[:100]}...")
+                        refined_sections[section] = refined_text
+                    except Exception as e:
+                        logger.warning(f"Failed to refine {section}: {e}. Keeping original content.")
+                        refined_sections[section] = section_text
+                else:
+                    logger.warning(f"No content extracted for {section}. Keeping original.")
+                    refined_sections[section] = section_text
+            else:
+                logger.warning(f"Section {section} not found in LaTeX file. Skipping refinement.")
+                refined_sections[section] = ""
+        except Exception as e:
+            logger.error(f"Error extracting section {section}: {e}")
+            refined_sections[section] = ""
+
+    # Update the LaTeX content with refined sections
+    updated_latex_content = latex_content
+    for section, refined_text in refined_sections.items():
+        if refined_text:
+            # Escape the refined text for LaTeX
+            refined_text = escape_latex(refined_text)
+            # Replace the section content
+            pattern = rf"(\\section\*\{{{section}\}})(.*?)(?=\\section\*\{{|\\end\{{table\}}|\\end\{{document\}})"
+            try:
+                # Find the section and its content
+                match = re.search(pattern, updated_latex_content, re.DOTALL)
+                if match:
+                    # Preserve any LaTeX structure (e.g., \begin{itemize}) that follows the section text
+                    original_content = match.group(2).strip()
+                    # Check if the original content contains structured elements (e.g., itemize, table)
+                    structured_part = ""
+                    if "\\begin{itemize}" in original_content:
+                        structured_part = original_content[original_content.find("\\begin{itemize}"):]
+                    elif "\\begin{table}" in original_content:
+                        structured_part = original_content[original_content.find("\\begin{table}"):]
+                    # Replace the section content, preserving the structured part
+                    new_section_content = f"{refined_text}\n{structured_part}" if structured_part else refined_text
+                    updated_latex_content = updated_latex_content.replace(match.group(0), f"\\section*{{{section}}}\n{new_section_content}")
+                else:
+                    logger.warning(f"Could not replace content for {section} during refinement.")
+            except Exception as e:
+                logger.error(f"Error replacing content for {section}: {e}")
+
+    # Write the updated LaTeX file
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(updated_latex_content)
+        logger.info(f"Updated LaTeX file '{output_path}' with refined content")
+        state["response"] = f"RFP response refined and saved as '{output_path}'. Ready for PDF compilation."
+    except Exception as e:
+        logger.error(f"Error saving refined LaTeX file: {e}")
+        state["response"] = f"Error saving refined LaTeX file: {e}"
+
     return state
 
 # Define the LangGraph workflow
@@ -700,12 +854,14 @@ workflow.add_node("extract_rfp", extract_rfp_text)
 workflow.add_node("generate_qa", generate_qa_pairs)
 workflow.add_node("store_qa", store_qa_pairs)
 workflow.add_node("generate_response", generate_response)
+workflow.add_node("refine_response", refine_response)
 
 # Define edges
 workflow.add_edge("extract_rfp", "generate_qa")
 workflow.add_edge("generate_qa", "store_qa")
 workflow.add_edge("store_qa", "generate_response")
-workflow.add_edge("generate_response", END)
+workflow.add_edge("generate_response", "refine_response")
+workflow.add_edge("refine_response", END)
 
 # Set entry point
 workflow.set_entry_point("extract_rfp")
